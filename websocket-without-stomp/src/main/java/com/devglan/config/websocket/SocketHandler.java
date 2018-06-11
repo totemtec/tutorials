@@ -18,43 +18,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
 @Component
 public class SocketHandler extends TextWebSocketHandler {
 
-    HashMap<Long, User> users = new HashMap<>();
-
-    {
-
-        User user1 = new User(1);
-        user1.setAvatar("http://images.newsmth.net/nForum/img/face_default_f.jpg");
-        user1.setName("逍遥一狂");
-        users.put(new Long(1), user1);
-
-        User user2 = new User(2);
-        user2.setAvatar("http://images.newsmth.net/nForum/uploadFace/D/douzi.2046.jpg");
-        user2.setName("miaomimiya");
-        users.put(new Long(2), user2);
-
-        User user3 = new User(3);
-        user3.setAvatar("http://images.newsmth.net/nForum/uploadFace/M/Missing7.8821.jpg");
-        user3.setName("豆子");
-        users.put(new Long(3), user3);
-
-        User user4 = new User(4);
-        user4.setAvatar("http://images.newsmth.net/nForum/uploadFace/M/MaxKevin.7754.jpg");
-        user4.setName("高飞");
-        users.put(new Long(4), user4);
-
-        User user5 = new User(5);
-        user5.setAvatar("http://images.newsmth.net/nForum/uploadFace/H/huangdh.4336.jpg");
-        user5.setName("老正太");
-        users.put(new Long(5), user5);
-    }
-
-
-
     private static final Logger logger = LoggerFactory.getLogger(SocketHandler.class);
 
-    List<WebSocketSession> sessions = new CopyOnWriteArrayList<>();
-    Map<String, List<User>> gamePlayers = new HashMap<>();  // game key
-    Map<String, User> sessionUserMap = new HashMap<>();  // session id
+//    List<WebSocketSession> sessions = new CopyOnWriteArrayList<>();
+    Map<String, List<WebSocketSession>> gamePlayers = new HashMap<>();  // game key <-> session user
 
     @Override
     public void handleTextMessage(WebSocketSession session, TextMessage message) throws InterruptedException, IOException {
@@ -68,16 +35,7 @@ public class SocketHandler extends TextWebSocketHandler {
         String code = value.get("code");
         String coor = value.get("coor");
 
-        List<User> users = joinGame(session, code, coor, userId);
-        Response response = new Response();
-        response.setCode(1);
-        response.setMessage("OK");
-        response.setUsers(users);
-
-        Gson gson = new Gson();
-        String str = gson.toJson(response);
-
-        session.sendMessage(new TextMessage(str));
+        joinGame(session, code, coor, userId);
     }
 
     @Override
@@ -104,7 +62,7 @@ public class SocketHandler extends TextWebSocketHandler {
 //        logger.info("Handshake header: Sec-WebSocket-Version {}", handshakeHeaders.get("Sec-WebSocket-Version").toString());
 
 
-        sessions.add(session);
+//        sessions.add(session);
     }
 
     @Override
@@ -119,22 +77,27 @@ public class SocketHandler extends TextWebSocketHandler {
 
     private void removeUserFromGame(WebSocketSession session)
     {
-        String sessionId = session.getId();
-        User user = sessionUserMap.get(sessionId);
-        if (user == null) return;
+        Object g = session.getAttributes().get("game");
+        if (g == null) return;
 
-        String gameKey = user.getGameKey();
-        List players = gamePlayers.get(gameKey);
+        String game = (String)g;
+
+        List players = gamePlayers.get(game);
         if (players == null) return;
-        players.remove(user);
+
+        players.remove(session);
 
         if (players.size() == 0)
         {
-            gamePlayers.remove(gameKey);
+            gamePlayers.remove(game);
+        }
+        else
+        {
+            sendMessageToPlayersForGame(game);
         }
     }
 
-    private List<User> joinGame(WebSocketSession session, String code, String coor, String userId)
+    private void joinGame(WebSocketSession session, String code, String coor, String userId)
     {
         String[] coors = coor.split(",");
         double latitude = Double.parseDouble(coors[0]);
@@ -142,32 +105,80 @@ public class SocketHandler extends TextWebSocketHandler {
         String lat = String.format("%.3f", latitude);
         String lng = String.format("%.3f", longitude);
 
-        User user = users.get(new Long(userId));
-        if (user == null)
+        String game = code+"_"+lat+","+lng;
+
+        //存取用户信息
+        Object userObject = session.getAttributes().get("user");
+        User user;
+        if (userObject == null)
         {
-            user = new User(new Long(userId));
-        }
-
-        sessionUserMap.put(session.getId(), user);
-
-        String key = code+"_"+lat+","+lng;
-        user.setGameKey(key);
-        List players = gamePlayers.get(key);
-        if (players == null)
-        {
-            players = new ArrayList();
-            players.add(user);
-
-            gamePlayers.put(key, players);
+            user = UserRepository.getUser(new Long(userId));
+            session.getAttributes().put("user", user);
+            session.getAttributes().put("game", game);
         }
         else
         {
-            if (!players.contains(user))
+            user = (User) userObject;
+        }
+
+        List<WebSocketSession> players = gamePlayers.get(game);
+        if (players == null)
+        {
+            players = new ArrayList();
+            players.add(session);
+
+            gamePlayers.put(game, players);
+        }
+        else
+        {
+            if (!players.contains(session))
             {
-                players.add(user);
+                players.add(session);
             }
         }
 
-        return players;
+        sendMessageToPlayersForGame(game);
+    }
+
+    private void sendMessageToPlayersForGame(String game)
+    {
+        List<WebSocketSession> sessions = gamePlayers.get(game);
+        List<User> players = new ArrayList<>();
+        for (WebSocketSession session : sessions)
+        {
+            if (session.isOpen())
+            {
+                Object u = session.getAttributes().get("user");
+                if(u != null)
+                {
+                    players.add((User)u);
+                }
+            }
+        }
+
+        Response response = new Response();
+        response.setCode(1);
+        response.setMessage("OK");
+        response.setUsers(players);
+
+        Gson gson = new Gson();
+        String str = gson.toJson(response);
+
+        //给参加比赛的所有用户发送消息
+        for (WebSocketSession session : sessions)
+        {
+            if (session.isOpen())
+            {
+                try
+                {
+                    session.sendMessage(new TextMessage(str));
+                }
+                catch (IOException e)
+                {
+                    //发送失败，直接删除用户
+                    sessions.remove(session);
+                }
+            }
+        }
     }
 }

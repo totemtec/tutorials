@@ -1,5 +1,7 @@
 package com.devglan.config.websocket;
 
+import org.springframework.web.socket.WebSocketSession;
+
 import java.util.Objects;
 
 public class User
@@ -7,7 +9,6 @@ public class User
     private String name;
     private long userId;
     private String avatar;
-    private String gameKey;
 
     public User(long userId)
     {
@@ -50,13 +51,5 @@ public class User
 
     public void setAvatar(String avatar) {
         this.avatar = avatar;
-    }
-
-    public String getGameKey() {
-        return gameKey;
-    }
-
-    public void setGameKey(String gameKey) {
-        this.gameKey = gameKey;
     }
 }
